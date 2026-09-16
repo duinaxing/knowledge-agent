@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "project-knowledge-agent"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi==0.141.1", "uvicorn==0.52.1", "pydantic-settings==2.14.2",
+  "SQLAlchemy==2.0.52", "alembic==1.20.0", "pgvector==0.4.2",
+  "psycopg[binary,pool]==3.3.5", "langgraph==1.2.9",
+  "langgraph-checkpoint-postgres==3.1.2", "httpx==0.28.1",
+  "python-multipart==0.0.32", "pypdf==6.16.2", "jieba==0.42.1", "rank-bm25==0.2.2"
+]
+
+[project.optional-dependencies]
+test = ["pytest==9.1.1"]
+local-embedding = ["sentence-transformers==5.7.0"]
+loadtest = ["psutil>=7.2,<8", "matplotlib>=3.10,<4"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
