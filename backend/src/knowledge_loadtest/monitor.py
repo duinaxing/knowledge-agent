@@ -1,6 +1,7 @@
 import asyncio
 import json
 import time
+import os
 from pathlib import Path
 import psutil
 from sqlalchemy import text
@@ -19,12 +20,13 @@ def database_sample():
 async def monitor(out, stop, halt):
     processes={};low_since=None;last_db=0;cached={}
     while not stop.is_set():
-        if __import__('os').environ.get('LOAD_MODEL_MODE')=='real' and (out/'budget.sqlite').exists():
+        budget_path=Path(os.environ.get('VALIDATION_BUDGET_FILE',str(out/'admissions.sqlite')))
+        if os.environ.get('LOAD_MODEL_MODE')=='real' and budget_path.exists():
             import sqlite3
-            with sqlite3.connect(out/'budget.sqlite') as budget:
+            with sqlite3.connect(budget_path) as budget:
                 try:
-                    row=budget.execute('SELECT used FROM budget WHERE id=1').fetchone()
-                    if row and row[0]>=1000:halt('MODEL_BUDGET_REACHED')
+                    row=budget.execute("SELECT count(*) FROM admissions WHERE kind='model'").fetchone()
+                    if row and row[0]>=(1500 if os.environ.get('VALIDATION_SUITE')=='quality' else 1000):halt('MODEL_BUDGET_REACHED')
                 except sqlite3.OperationalError:pass
         record_path=out/'processes.json'
         records=json.loads(record_path.read_text()) if record_path.exists() else []

@@ -30,6 +30,8 @@
 
 ## 100 人隔离压力测试
 
+新增[质量、容量与恢复验证指南](docs/VALIDATION_GUIDE.md)：150 案例独立题库、持久化模型调用预算、四组并发对照、复杂问法补测，以及数据库与原件的一致备份恢复演练。真实模型调用需显式 `-Real`，语义验收仍需独立人工审阅。
+
 [2026-09-16 优化复测](docs/PERFORMANCE_OPTIMIZATION_2026-09-16.md)：加入指定文档的简单问答快路径，应用默认 8 槽位。模拟峰值 100/100 按时回答、P95 28.985 秒；提交 P95 1.093 秒仍略高于目标，真实模型与持续压力尚未验收。
 
 技术细节和验收口径见 [100 人并发压测方案](docs/LOAD_TEST_PLAN_100_USERS.md)。`./run-loadtest.ps1 -Profile smoke` 验证工具链与单轮峰值；`./run-loadtest.ps1` 执行完整模拟场景；`./run-loadtest.ps1 -Real` 显式启用真实模型，最多 200 问答 / 1000 次模型请求。结果在 `runtime/loadtest/results/`，不使用业务数据库。
@@ -156,6 +158,8 @@ python evaluation/run.py --split heldout --trials 3 --concurrency 5 --baselines 
 项目独立成为 Git 仓库时，`.github/workflows/ci.yml` 可直接使用；在当前上级目录运行时，嵌套 workflow 不会自动触发。CI 含工程测试和真实 PostgreSQL smoke；尚未在远程 CI 执行。
 
 ## 文档
+
+- [2026-09-17 验证交付状态](docs/VALIDATION_STATUS_20260917.md)：质量、容量、恢复三份报告及尚未通过项。
 
 - [2026-09-14 对抗性审查及修复报告](docs/ADVERSARIAL_REVIEW_2026-09-14.md)
 

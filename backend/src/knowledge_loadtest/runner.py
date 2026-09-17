@@ -10,6 +10,7 @@ import uuid
 import httpx
 from .common import AREA, guard, write_json
 from .monitor import monitor, database_sample
+from .budget import reserve as admission
 
 
 class Harness:
@@ -80,12 +81,15 @@ class Harness:
             conv=r.json()['id']
             await self.query_in(u,conv,rag,planned)
 
-    async def query_in(self,u,conv,rag=True,planned=None,gate=None):
+    async def query_in(self,u,conv,rag=True,planned=None,gate=None,message_override=None,extra_doc=None):
         if gate:await gate.wait()
         if self.halted or (self.real and self.submitted>=200):return
         self.submitted+=1
+        if self.real and not admission(Path(os.environ.get('VALIDATION_BUDGET_FILE',str(self.out/'admissions.sqlite'))),'question',200,uuid.uuid4().hex):
+            self.halt('QUESTION_BUDGET_EXHAUSTED');return
         d=self.doc(u,u%3)
         message=f"What is the verification code in {d['title']}?" if rag else 'Explain how to organize an effective meeting in one sentence.'
+        if message_override is not None:message=message_override
         start=time.monotonic();scheduled=planned[0] if planned else start
         row={'user':u,'rag':rag,'scheduled':scheduled,'sent':start,'send_lag':start-scheduled,'submitted':False,'completed':False,'valid':False,'queue_seconds':None,'execution_seconds':None,'sse_reconnects':0}
         body={'message':message,'client_request_id':uuid.uuid4().hex}
@@ -124,6 +128,7 @@ class Harness:
             data=result.json();answer=data.get('answer') or {};row['state']=data['state'];row['answer_status']=answer.get('status');row['error']=data.get('error_code')
             row['completed']=data['state']=='completed'
             row['valid']=row['completed'] and answer.get('status')=='answered' and (d['code'] in answer.get('answer','') if rag else answer.get('kind')=='general')
+            if extra_doc and extra_doc['code'] not in answer.get('answer',''):row['valid']=False
             row['warnings']=answer.get('warnings',[])
             for e in answer.get('evidence',[]):
                 if e.get('type')!='document':continue
@@ -169,6 +174,22 @@ class Harness:
         tasks=[asyncio.create_task(self.query_in(u,convs[u],u%10<7,planned,gate)) for u in range(100)]
         await asyncio.sleep(.1);planned[0]=time.monotonic();gate.set();await asyncio.gather(*tasks)
 
+    async def complex_questions(self,kind):
+        async def person(u):
+            response=await self.request(u,'POST','/api/conversations')
+            if response is None or response.status_code!=201:self.halt('COMPLEX_SETUP_FAILED');return
+            conv=response.json()['id'];doc=self.doc(u,u%3);extra=None
+            if kind=='followup':
+                await self.query_in(u,conv,True)
+                message='What is the verification code of the previous specification again?'
+            elif kind=='comparison':
+                extra=self.fixture['documents'][(u+1)%100]
+                message=f"Compare {doc['title']} and {extra['title']}; give both verification codes."
+            else:message=f"What is the verification code for operational specification number {int(doc['id'][2:]):03}?"
+            await self.query_in(u,conv,True,message_override=message,extra_doc=extra)
+        # Fixed ten active users; explicitly not a 100-user capacity claim.
+        await asyncio.gather(*(person(u) for u in range(10)))
+
     async def isolation(self):
         self.expected_errors=True
         try:
@@ -213,7 +234,12 @@ class Harness:
             write_json(self.out/'fault.json',{'kind':kind,'until':time.time()+35})
             tasks=[asyncio.create_task(self.query(u,True)) for u in range(4)]
             if kind=='worker':
-                await asyncio.sleep(3)
+                for _ in range(100):
+                    snapshot=await asyncio.to_thread(database_sample)
+                    if snapshot['states'].get('running',0):break
+                    await asyncio.sleep(.1)
+                else:raise RuntimeError('Worker fault invalid: no running task observed')
+                self.log('fault-injection.jsonl',{'running_before_restart':snapshot['states']['running']})
                 if self.restart_worker:await asyncio.to_thread(self.restart_worker)
                 else:raise RuntimeError('Worker restart callback missing')
             await asyncio.gather(*tasks)
@@ -256,6 +282,11 @@ class Harness:
             elif self.profile=='smoke':
                 await self.phase_run('smoke_reads_100',lambda:self.mixed(100,15,True))
                 await self.phase_run('smoke_burst_100',self.burst)
+            elif self.profile=='burst':
+                for i in range(3):await self.phase_run(f'burst_100_{i+1}',self.burst)
+            elif self.profile=='complex':
+                for kind in ('unnamed','comparison','followup'):
+                    await self.phase_run('complex_'+kind,lambda kind=kind:self.complex_questions(kind))
             else:
                 await self.phase_run('baseline_1',lambda:self.mixed(1,180))
                 await self.phase_run('reads_100',lambda:self.mixed(100,600,True))

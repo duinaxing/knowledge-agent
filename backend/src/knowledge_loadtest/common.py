@@ -5,8 +5,11 @@ from pathlib import Path
 from sqlalchemy.engine import make_url
 
 ROOT = Path(__file__).resolve().parents[3]
-AREA = ROOT / 'runtime' / 'loadtest'
-DB_NAME = 'knowledge_loadtest_100'
+SUITE = os.environ.get('VALIDATION_SUITE', 'loadtest')
+if SUITE not in ('loadtest', 'quality'):
+    raise RuntimeError('Unknown validation suite')
+AREA = ROOT / 'runtime' / SUITE
+DB_NAME = 'knowledge_quality_test' if SUITE == 'quality' else 'knowledge_loadtest_100'
 
 
 def guard(url=None, files=None):

@@ -12,7 +12,7 @@ import time
 from pathlib import Path
 import httpx
 import psutil
-from .common import ROOT, AREA, guard, write_json
+from .common import ROOT, AREA, DB_NAME, SUITE, guard, write_json
 
 
 def configure(mode, workers=4, fast_path=True):
@@ -23,11 +23,13 @@ def configure(mode, workers=4, fast_path=True):
     url=make_url(original.database_url)
     if url.host not in ('localhost','127.0.0.1') or not url.drivername.startswith('postgresql'):
         raise RuntimeError('This harness requires local PostgreSQL')
+    url=url.update_query_dict({'connect_timeout':'5'})
     upstream=original.model_api_key.get_secret_value()
     if mode=='real' and not upstream:raise RuntimeError('Real provider credential is missing')
-    os.environ.update(DATABASE_URL=url.set(database='knowledge_loadtest_100').render_as_string(hide_password=False),
+    os.environ.update(DATABASE_URL=url.set(database=DB_NAME).render_as_string(hide_password=False),
         FILE_ROOT=str(AREA/'files'),MODEL_MODE='real',MODEL_BASE_URL='http://127.0.0.1:8102',
         MODEL_API_KEY=secrets.token_urlsafe(24),EMBEDDING_BASE_URL='http://127.0.0.1:8101',
+        MODEL_NAME=original.model_name,
         EMBEDDING_MODEL='BAAI/bge-small-zh-v1.5',EMBEDDING_DIM='512',EMBEDDING_API_KEY='local-only',
         WORKER_CONCURRENCY=str(workers),SIMPLE_DOCUMENT_FAST_PATH=str(fast_path).lower(),RUN_TIMEOUT='60',MODEL_TIMEOUT='20',TOOL_TIMEOUT='5',
         LOAD_MODEL_MODE=mode,LOAD_UPSTREAM_URL=original.model_base_url,LOAD_UPSTREAM_KEY=upstream,
@@ -41,7 +43,8 @@ def configure(mode, workers=4, fast_path=True):
 
 def main():
     parser=argparse.ArgumentParser()
-    parser.add_argument('--profile',choices=['full','smoke','faults'],default='full')
+    parser.add_argument('--profile',choices=['full','smoke','faults','burst','complex'],default='full')
+    parser.add_argument('--experiment',default='validation-v1')
     parser.add_argument('--real',action='store_true')
     parser.add_argument('--workers',type=int,choices=range(1,9),default=4)
     parser.add_argument('--legacy-agent',action='store_true')
@@ -67,6 +70,9 @@ def main():
             except OSError:raise RuntimeError(f'Port {port} is occupied; no process was stopped') from None
     out=AREA/'results'/(time.strftime('%Y%m%d-%H%M%S')+'-'+secrets.token_hex(3))
     out.mkdir(parents=True);os.environ['LOAD_RESULT_DIR']=str(out)
+    if not args.experiment.replace('-','').replace('_','').isalnum():raise RuntimeError('Invalid experiment ID')
+    budget_dir=AREA/'budgets'/args.experiment;budget_dir.mkdir(parents=True,exist_ok=True)
+    os.environ['VALIDATION_BUDGET_FILE']=str(budget_dir/'admissions.sqlite')
     write_json(AREA/'latest.json',{'directory':str(out)})
     write_json(out/'environment.json',{'platform':platform.platform(),'python':sys.version,'cpu':platform.processor(),'logical_cpus':psutil.cpu_count(),'memory_bytes':psutil.virtual_memory().total,
         'profile':args.profile,'mode':'real' if args.real else 'mock','worker_concurrency':args.workers,'simple_document_fast_path':not args.legacy_agent,'run_timeout':60,'shared_host':True})
@@ -97,16 +103,23 @@ def main():
         print('Results:',out,flush=True)
         start('embedding','uvicorn','knowledge_agent.local_embeddings:app','--host','127.0.0.1','--port','8101','--no-access-log')
         wait('http://127.0.0.1:8101/health')
-        prep=start('prepare','knowledge_loadtest.prepare');code=prep.wait()
+        prep=start('prepare','knowledge_quality.prepare' if SUITE=='quality' else 'knowledge_loadtest.prepare');code=prep.wait()
         if code:raise RuntimeError('Fixture preparation failed; inspect prepare.log')
         children.remove(('prepare',prep))
+        from .provenance import snapshot
+        write_json(out/'provenance.json',snapshot())
         start('gateway','uvicorn','knowledge_loadtest.gateway:app','--host','127.0.0.1','--port','8102','--no-access-log')
         wait('http://127.0.0.1:8102/health')
-        start('api','uvicorn','knowledge_agent.api:app','--host','127.0.0.1','--port','8100','--no-access-log')
+        api_module='knowledge_loadtest.instrumented_api:app' if args.profile=='full' and SUITE=='loadtest' else 'knowledge_agent.api:app'
+        start('api','uvicorn',api_module,'--host','127.0.0.1','--port','8100','--no-access-log')
         wait('http://127.0.0.1:8100/api/ready')
         worker=start('worker','knowledge_loadtest.worker')
-        from .runner import Harness
-        asyncio.run(Harness(out,args.profile,restart_worker).run())
+        if SUITE=='quality':
+            from knowledge_quality.runner import run
+            asyncio.run(run(out,args.real))
+        else:
+            from .runner import Harness
+            asyncio.run(Harness(out,args.profile,restart_worker).run())
     except BaseException as exc:
         write_json(out/'launch-error.json',{'type':type(exc).__name__})
         raise
@@ -117,8 +130,12 @@ def main():
                 try:p.wait(timeout=15)
                 except subprocess.TimeoutExpired:p.kill();p.wait(timeout=5)
         for log in logs:log.close()
-        from .report import summarize
-        summarize(out)
+        if SUITE!='quality':
+            from .report import summarize
+            summarize(out)
+            if args.profile=='full':
+                from .plans import capture
+                capture(out)
         print('Report:',out/'REPORT.md',flush=True)
 
 
