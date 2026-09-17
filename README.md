@@ -1,16 +1,37 @@
-# 知序 · 企业项目知识查询 Agent
+# Knowledge Agent · 知序
 
-项目 2：员工联合查询授权项目的当前状态、负责人和历史文档，查看来源、时间与不确定性。范围依据 [产品技术文档](PRODUCT_TECH_SPEC.md)。
+面向企业内部资料的知识问答工作台。管理员在浏览器中维护项目、文档和用户组；员工使用独立会话提问，结合 DeepSeek 与授权知识库获得带来源片段的回答，也可以直接进行通用问答。
 
-当前实现包括 React 管理/查询界面、FastAPI、统一 ACL、版本化文档、四工具 LangGraph、任务/SSE、模型适配与基线评测入口。PostgreSQL 工程测试、进程崩溃恢复和真实模型联调已执行；完整产品质量门槛与人工评测状态见 [验收记录](docs/ACCEPTANCE.md)。
+技术栈：**React + TypeScript · FastAPI · LangGraph · PostgreSQL / pgvector · 本地中文 Embedding**。范围依据 [产品技术文档](PRODUCT_TECH_SPEC.md)。
 
-## 本次功能更新
+[功能](#核心功能) · [启动](#快速开始) · [验证结果](#当前验证状态) · [质量与压测](#质量容量与恢复验证) · [文档](#文档)
 
-- 知识查询：相关文档使用 RAG 并展示引用；通用问题由 DeepSeek 回答，显示“DeepSeek 通用回答”。
-- 会话侧栏的删除入口及聊天区“删除当前会话”可删除会话，操作前会确认。
-- 项目记录新增“删除项目”。关联文档保留管理员预览，但退出知识查询，避免误删或扩大权限。
-- 编辑项目使用“项目简要情况”代替原“别名”输入框。
-- 数据库新增迁移 0003；现有数据已迁移，迁移前已备份。
+## 核心功能
+
+| 模块 | 能力 |
+|---|---|
+| 知识查询 | 授权文档 RAG、引用片段与版本展示、项目状态和负责人查询；通用问题交给 DeepSeek |
+| 会话管理 | 每个用户独立的新建、重命名、删除、分页历史；重新登录后继续查看 |
+| 项目记录 | 新增、编辑、删除项目，维护项目简要情况、人员角色、交付日期和阻塞事项 |
+| 文档库 | 上传、内容预览、版本发布、访问授权、单份或批量删除 |
+| 用户组与处理任务 | 增删用户组、维护员工归属；查看文档解析和索引任务状态 |
+| 反馈处理 | 记录有问题的回答，供管理员查看相关回答并处理反馈 |
+| 账号 | 注册、登录、注销、修改密码；数据管理仅向管理员开放 |
+
+## 当前验证状态
+
+以下为 **2026-09-17 本机测试**，详细口径见 [验收汇总](docs/VALIDATION_STATUS_20260917.md)。
+
+| 验证项 | 结果与边界 |
+|---|---|
+| 后端自动回归 | 153 项通过，使用隔离 PostgreSQL 测试库 |
+| 质量开发集 | 50 例 / 55 次问答完成；模拟规划下目标证据 Recall@6 为 92.86%，不代表真实语义正确率 |
+| 100 人持续混合负载 | 模拟模型，30 分钟 1739/1739 有效回答，端到端 P95 3.016 秒 |
+| 100 人集中提问 | 三轮均 100/100 在 60 秒内回答；提交 P95 1.59–1.67 秒，**尚未达到 1 秒目标** |
+| 备份恢复 | 数据库、原件、权限与历史验证通过，测试规模恢复耗时 17.406 秒 |
+| 待完成 | 本批次真实 DeepSeek 质量与压测、独立人工语义审阅 |
+
+客户端和服务端共用一台电脑，以上不能作为生产容量承诺。已有历史真实模型实验与本批次隔离验证分别记录，项目尚未全面验收。
 
 ## 账号、知识库与历史会话
 
@@ -23,37 +44,55 @@
 
 ## 模型分工
 
-- **生成回答：DeepSeek**，通过官方兼容接口调用 `deepseek-flash`，模型名可配置。
+- **生成回答：DeepSeek**，通过兼容接口调用；仓库配置示例使用 `deepseek-flash`，请按实际可用模型设置 `MODEL_NAME`。
 - **语义检索：本地 BAAI/bge-small-zh-v1.5**，CPU 执行，512 维；不需要另外购买 Embedding API。也支持替换为兼容 `/embeddings` 的 API。
 - BM25 和向量检索都先按用户权限和版本过滤，再用 RRF 融合。可选远程 reranker 默认关闭。
 - `MODEL_MODE=test` 的哈希向量只服务确定性测试，绝不能用于语义评测或展示真实效果。
 
-## 100 人隔离压力测试
+## 质量、容量与恢复验证
 
-新增[质量、容量与恢复验证指南](docs/VALIDATION_GUIDE.md)：150 案例独立题库、持久化模型调用预算、四组并发对照、复杂问法补测，以及数据库与原件的一致备份恢复演练。真实模型调用需显式 `-Real`，语义验收仍需独立人工审阅。
+[验证指南](docs/VALIDATION_GUIDE.md) 包含 150 例冻结题库、四组槽位 / 快路径对照、复杂问法、故障注入与一致备份恢复。测试使用独立数据库和目录，不修改业务 `.env`。
 
-[2026-09-16 优化复测](docs/PERFORMANCE_OPTIMIZATION_2026-09-16.md)：加入指定文档的简单问答快路径，应用默认 8 槽位。模拟峰值 100/100 按时回答、P95 28.985 秒；提交 P95 1.093 秒仍略高于目标，真实模型与持续压力尚未验收。
+先安装验证依赖：`python -m pip install -e './backend[test,local-embedding,loadtest]'`。以下 PowerShell 脚本沿用本机 Python 路径，新环境先调整脚本中的路径。
 
-技术细节和验收口径见 [100 人并发压测方案](docs/LOAD_TEST_PLAN_100_USERS.md)。`./run-loadtest.ps1 -Profile smoke` 验证工具链与单轮峰值；`./run-loadtest.ps1` 执行完整模拟场景；`./run-loadtest.ps1 -Real` 显式启用真实模型，最多 200 问答 / 1000 次模型请求。结果在 `runtime/loadtest/results/`，不使用业务数据库。
+```powershell
+./run-quality.ps1 -Split dev
+./run-loadtest.ps1 -Profile smoke -Workers 8
+./run-validation.ps1                  # 四组对照 + 完整模拟负载 + 复杂问法
+./run-recovery.ps1                    # 停止源测试实例后执行；目标已存在则拒绝覆盖
+```
 
-[首次验证结果](docs/LOAD_TEST_RESULTS_2026-09-15.md)：100 人峰值提交全部成功，但仅 42 个有效回答，未达峰值目标；完整持续测试和真实模型阶段尚未执行。
+默认生成模型为模拟模式；真实本地 Embedding 仍参与检索。显式 `-Real` 才会发起真实生成模型调用：质量预算 300 问答 / 1500 模型请求，真实压测 200 / 1000，两份预算分开，重试计数、重启不清零。同一批次保持相同 `-Experiment`，不能换编号绕过上限。
 
-## 当前电脑一键启动
+结果保存在 `runtime/quality/`、`runtime/loadtest/` 和 `runtime/recovery/`。验收报告：[质量](docs/VALIDATION_QUALITY_20260917.md) · [容量](docs/VALIDATION_CAPACITY_20260917.md) · [恢复](docs/VALIDATION_RECOVERY_20260917.md)。
+
+## 快速开始
+
+需要 Python 3.11+、Node.js / npm，以及 PostgreSQL + pgvector。下面的命令均从本仓库根目录执行。
+
+```powershell
+git clone https://github.com/duinaxing/knowledge-agent.git
+cd knowledge-agent
+```
+
+### 已初始化的 Windows 环境
 
 **一键启动：双击 `start.cmd`**。自动启动数据库、Embedding、API、后台任务和前端，检查就绪后打开浏览器。重复启动会复用服务；启动失败会保留错误提示，日志在 `runtime/`。不会重置用户、文档或会话，也不会重新导入演示数据。
 
 命令行也可运行 `./start.ps1`；`./start.ps1 -Restart` 重启应用服务，`./start.ps1 -NoBrowser` 仅启动、不打开浏览器。本入口适用于已按下文安装和初始化的当前电脑。
 
-本机已安装依赖、下载 BGE 权重并初始化合成数据。在 `project/` 执行：
+也可以分步启动数据库和应用：
 
 ```powershell
 ./start-postgres.ps1
 ./start-local.ps1
 ```
 
-访问 [本地工作台](http://127.0.0.1:5173)。员工账号 `employee1` 至 `employee6`，管理员 `admin`，当前所有账号密码统一为 `123456`；初始化配置为 `.env` 的 `SEED_PASSWORD`。修改代码后用 `./start-local.ps1 -Restart` 重启本项目服务。
+访问 [本地工作台](http://127.0.0.1:5173)。合成演示账号为 `admin` 和 `employee1` 至 `employee6`，默认初始化密码 `123456`；实际密码以初始化时的 `SEED_PASSWORD` 或之后修改的密码为准。修改配置不会重置已有账号密码。
 
-新电脑使用下方依赖/模型配置步骤，然后安装独立数据库运行时并初始化：
+### 首次安装
+
+先完成下节的依赖安装、`.env` 配置和模型下载（步骤 1–3），然后安装本地 PostgreSQL 运行时并初始化：
 
 ```powershell
 conda create --prefix ./runtime/postgres -c conda-forge postgresql=16 pgvector=0.8.6 -y
@@ -72,7 +111,7 @@ python -m knowledge_agent.bootstrap --publish-synthetic
 
 下列 SQLite 演示模式便于在尚无 PostgreSQL 的电脑上联调，**不验证 PostgreSQL 锁、pgvector 算子和持久检查点**。正式架构仍为下一节的 PostgreSQL。
 
-1. 激活约定环境：`conda activate hello_agents_py311`。在 `project/` 执行：
+1. 激活 Python 3.11+ 虚拟环境（本机使用 `conda activate hello_agents_py311`），在仓库根目录执行：
 
    ```powershell
    python -m pip install -e './backend[test,local-embedding]'
@@ -155,7 +194,7 @@ python evaluation/run.py --split heldout --trials 3 --concurrency 5 --baselines 
 
 它会产生真实模型调用费用。基线分别为授权关键词搜索、固定文档 RAG、固定跨源编排、动态 Agent。所有结果记录模型、调用数、用量和耗时。120 题是**合成题与参考答案草稿**，80/40 按项目分组切分；保留项目使用客户目录和供应商审计两个独立主题，尚待独立人工复核，未填写的人工作答成功率/引用支持率保持 null。
 
-项目独立成为 Git 仓库时，`.github/workflows/ci.yml` 可直接使用；在当前上级目录运行时，嵌套 workflow 不会自动触发。CI 含工程测试和真实 PostgreSQL smoke；尚未在远程 CI 执行。
+本仓库的 [GitHub Actions](.github/workflows/ci.yml) 配置了工程测试和 PostgreSQL smoke。本地通过记录不代表本次 GitHub Actions 已通过，远程结果以 Actions 页面为准。
 
 ## 文档
 
@@ -170,4 +209,4 @@ python evaluation/run.py --split heldout --trials 3 --concurrency 5 --baselines 
 - [依赖许可证](docs/LICENSES.md)
 - [OpenAPI](docs/openapi.json)，运行时也可访问 `/docs`。
 
-`.env`、原件、模型、运行日志与评测原始输出均被 `.gitignore` 排除。所有演示数据明确为合成，项目 1 未修改。
+`.env`、原件、模型、运行日志与评测原始输出均被 `.gitignore` 排除。演示数据均为合成数据；本地默认凭据与启动脚本不适合直接用于公开部署。
